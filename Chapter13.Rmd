@@ -1,0 +1,202 @@
+---
+title: "Chapter 13: Logistic regression"
+author: "Wang minjie"
+date: "`r format(Sys.Date())`"
+output:
+  github_document
+---
+
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tidybayes)
+library(rstan)
+library(loo)
+
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+theme_set(bayesplot::theme_default())
+```
+
+
+## 13.1 Logistic regression with a single predictor
+```{r}
+nes <- read.table("ROS-Examples/NES/data/nes.txt", header = T)
+glimpse(nes)
+```
+
+```{r}
+df <- nes %>% 
+  filter(year == 1992, !is.na(rvote), !is.na(dvote),  rvote == 1 | dvote == 1)
+df
+```
+
+
+
+
+
+```{r}
+df %>% 
+  ggplot(aes(x = income, y = rvote)) +
+  geom_jitter()
+```
+
+数学表达式
+
+$$
+\begin{align}
+\text{Pr}(y_i = 1) &= p_i \\
+\text{logit}(p_i) &= X_i \beta
+\end{align}
+$$
+我更喜欢这种表述
+$$
+\begin{align}
+y &= \text{bernoulli}(p_i) \\
+p_i & = \text{inv_logit}(\alpha + \beta x)
+\end{align}
+$$
+用Stan语言表达的似然函数
+$$
+\begin{align}
+\texttt{bernoulli}\mathtt{\_}\texttt{logit}\left(y \mid \alpha + \beta x \right)
+=
+\texttt{bernoulli}\left(y \mid \operatorname{logit}^{-1}(\alpha + \beta x)\right).
+\end{align}
+$$
+
+Stan代码如下
+```{r, warning=FALSE, message=FALSE}
+stan_program <- "
+data {
+  int<lower=0> N;
+  vector[N] x;
+  int<lower=0,upper=1> y[N];
+}
+parameters {
+  real alpha;
+  real beta;
+}
+model {
+
+  //for (n in 1:N){
+  //  y[n] ~ bernoulli(inv_logit(alpha + beta * x[n]));
+  //}
+  
+  // more efficient and arithmetically stable
+  y ~ bernoulli_logit(alpha + beta * x);
+}
+"
+
+
+stan_data <- list(
+   N = nrow(df),
+   x = df$income, 
+   y = df$rvote
+  )
+
+m13.1 <- stan(model_code = stan_program, data = stan_data)
+```
+
+
+
+```{r}
+m13.1 %>% 
+  tidybayes::spread_draws(beta) %>% 
+  
+  ggplot(aes(x = beta)) +
+  tidybayes::stat_halfeye(.width = c(0.66, 0.95)) + 
+  theme_bw() 
+```
+
+
+## 13.3 Predictions and comparisons
+
+```{r, warning=FALSE, message=FALSE}
+stan_program <- "
+data {
+  int<lower=0> N;
+  vector[N] x;
+  int<lower=0,upper=1> y[N];
+  int<lower=0> M;
+  vector[M] new_x;  
+}
+parameters {
+  real alpha;
+  real beta;
+}
+model {
+  y ~ bernoulli_logit(alpha + beta * x);
+}
+
+generated quantities {
+  vector[M] y_linpred; 
+  vector[M] y_epred; 
+  vector[M] y_predict; 
+  vector[M] mu = alpha + beta * new_x;
+
+  for(i in 1:M) {
+    y_linpred[i] = mu[i];
+    y_epred[i] = inv_logit(mu[i]);
+    y_predict[i] = bernoulli_logit_rng(mu[i]);
+  }
+   
+}
+"
+
+
+newdata <- tibble(
+  income = 1:5
+)
+
+
+stan_data <- list(
+      N      = nrow(df),
+      x      = df$income, 
+      y      = df$rvote,
+      new_x  = newdata$income,
+      M      = length(newdata$income)
+  )
+
+m13.1a <- stan(model_code = stan_program, data = stan_data)
+```
+
+
+```{r}
+m13.1a
+```
+
+## using brms
+```{r}
+library(brms)
+brms_logit <- brm(
+  rvote | trials(1) ~ income,
+  family = binomial(link = "logit"),
+  data = df
+  )
+```
+
+```{r}
+brms_logit %>% 
+  tidybayes::linpred_draws(
+    newdata = newdata
+  ) %>% 
+  tidybayes::mean_hdi()
+```
+
+```{r}
+brms_logit %>% 
+  tidybayes::epred_draws(
+    newdata = newdata
+  ) %>% 
+  tidybayes::mean_hdi()
+```
+
+```{r}
+brms_logit %>% 
+  tidybayes::predicted_draws( # 输出 0, 1, 1 ... 
+    newdata = newdata
+  ) %>% 
+  tidybayes::mean_hdi()       # 统计均值
+```
+
