@@ -50,13 +50,13 @@ model {
 "
 
 
-stan_data <- wells %>% 
+stan_data <- wells %>%
   tidybayes::compose_data(
     N = n,
     K = 4,
     y = switch,
     X = model.matrix(~ 1 + dist100 + arsenic + dist100:arsenic)
- 	)
+  )
 
 m14.3 <- stan(model_code = stan_program, data = stan_data)
 ```
@@ -64,21 +64,86 @@ m14.3 <- stan(model_code = stan_program, data = stan_data)
 ## 14.2.1 Centering the input variables.
 ```{r}
 wells <-
-  wells %>% 
-  mutate(c_dist100 = dist100 - mean(dist100),
-         c_arsenic = arsenic - mean(arsenic))
+  wells %>%
+  mutate(
+    c_dist100 = dist100 - mean(dist100),
+    c_arsenic = arsenic - mean(arsenic)
+  )
 ```
 
 
 ```{r}
-stan_data <- wells %>% 
+stan_data <- wells %>%
   tidybayes::compose_data(
     N = n,
     K = 4,
     y = switch,
     X = model.matrix(~ 1 + c_dist100 + c_arsenic + c_dist100:c_arsenic)
- 	)
+  )
 
 m14.4 <- stan(model_code = stan_program, data = stan_data)
 ```
 
+## 14.3 Predictive simulation
+
+```{r}
+stan_data <- wells %>%
+  tidybayes::compose_data(
+    N = n,
+    K = 2,
+    y = switch,
+    X = model.matrix(~ 1 + dist100)
+  )
+
+m14.9 <- stan(model_code = stan_program, data = stan_data)
+```
+
+重复Fig14.4
+```{r, fig.width = 6.5, fig.height = 2.75}
+post <- m14.9 %>%
+  tidybayes::gather_draws(beta[i]) %>%
+  ungroup() %>%
+  tidyr::pivot_wider(
+    names_from = i,
+    values_from = .value
+  ) %>%
+  rename(
+    alpha = `1`, beta = `2`
+  )
+
+
+p1 <- post %>%
+  ggplot(aes(x = alpha, y = beta)) +
+  geom_point(size = 1 / 10, alpha = 2 / 3) +
+  labs(
+    x = expression(beta[0]),
+    y = expression(beta[1])
+  ) +
+  coord_cartesian(
+    ylim = c(NA, 0),
+    xlim = c(0.4, 0.8)
+  )
+
+
+
+
+logit    <- qlogis
+invlogit <- plogis
+
+
+p2 <- ggplot() +
+  map2(.x = post$alpha[1:20], .y = post$beta[1:20], .f = function(b0 = .x, b1 = .y) {
+    stat_function(
+      fun = function(x) invlogit(b0 + b1 * x),
+      size = 1 / 8, alpha = 1 / 2
+    )
+  }) +
+  scale_x_continuous("Distance (in meters) to nearest safe well",
+    expand = c(0, 0), limits = c(0, 3.5),
+    breaks = 0:3, labels = 0:3 * 100
+  ) +
+  scale_y_continuous("Pr (switching)", expand = c(0, 0), limits = 0:1)
+
+
+p1 + p2 + plot_layout(widths = c(2, 3))
+```
