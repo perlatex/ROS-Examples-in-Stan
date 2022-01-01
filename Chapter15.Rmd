@@ -1,0 +1,433 @@
+---
+title: "Chapter 15: Other generalized linear models"
+author: "Wang minjie"
+date: "`r format(Sys.Date())`"
+output:
+  github_document
+---
+
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tidybayes)
+library(bayesplot)
+library(rstan)
+library(patchwork)
+
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+theme_set(bayesplot::theme_default())
+```
+
+
+### 15.2.1 Poisson model.
+
+```{r, warning = F, message = F}
+n <- 50
+
+a <- 1
+b <- 2
+
+fake <- 
+  tibble(x = runif(n, -2, 2)) %>% 
+  mutate(y = rpois(n, lambda = exp(a + b * x)))
+
+head(fake)
+```
+
+
+
+
+
+
+```{r, warning=FALSE, message=FALSE}
+stan_program <- "
+data {
+  int<lower=0> N;
+  int<lower=0> K;
+  matrix[N, K] X;
+  int<lower=0> y[N];
+}
+
+parameters {
+  vector[K] beta;
+}
+
+model {
+  // y ~ poisson_log( X * beta);
+  target += poisson_log_lpmf(y | X * beta);
+}
+"
+
+
+stan_data <- fake %>%
+  tidybayes::compose_data(
+    N = n,
+    K = 2,
+    y = fake,
+    X = model.matrix(~ 1 + x)
+  )
+
+m15.1 <- stan(model_code = stan_program, data = stan_data)
+```
+
+```{r}
+m15.1
+```
+
+
+### 15.2.8 Example: zeroes in count data.
+
+```{r, warning = F}
+roaches <- 
+  read_csv("ROS-Examples/Roaches/data/roaches.csv", 
+           col_types = cols(X1 = col_skip())) %>% 
+  mutate(roach100 = roach1 / 100)
+
+glimpse(roaches)
+```
+
+
+```{r, warning=FALSE, message=FALSE}
+stan_program <- "
+data {
+  int<lower=0> N;
+  int<lower=0> K;
+  matrix[N, K] X;
+  int<lower=0> y[N];
+  vector[N] offset;
+}
+
+parameters {
+  vector[K] beta;
+  real phi;
+}
+
+model {
+  //target += neg_binomial_2_log_lpmf(y| X * beta, phi);
+  
+  for(i in 1:N) {
+    y[i] ~ neg_binomial_2(offset[i] * exp(X[i] * beta), phi);
+  }
+}
+
+generated quantities {
+  int y_rep[N];
+  for (n in 1:N) {
+    y_rep[n] = neg_binomial_2_rng(offset[n] * exp(X[n] * beta), phi);
+  }
+}
+
+"
+
+
+stan_data <- roaches %>%
+  tidybayes::compose_data(
+    N      = n,
+    K      = 4,
+    y      = y,
+    X      = model.matrix(~ 1 + roach100 + treatment + senior),
+    offset = exposure2
+  )
+
+m15.2 <- stan(model_code = stan_program, data = stan_data)
+```
+
+
+
+```{r}
+m15.2
+```
+
+
+```{r}
+y_rep <- as.matrix(m15.2, pars = "y_rep")
+bayesplot::ppc_dens_overlay(y = log10(stan_data$y + 1), yrep = log10(y_rep[1:200,] + 1))
+```
+
+
+```{r}
+m15.2 %>% 
+  tidybayes::gather_draws(y_rep[i], ndraws = 200) %>% 
+  ungroup() %>% 
+  mutate(y = log10(.value + 1) ) %>% 
+
+  ggplot(aes(x = y)) +
+  geom_density(aes(group = .draw), color = "gray50") +
+  geom_density(
+    data = roaches %>% mutate(y = log10(y + 1)),
+    color = "red"
+  ) 
+```
+
+### What if we had used Poisson regression?
+
+```{r, warning=FALSE, message=FALSE}
+stan_program <- "
+data {
+  int<lower=0> N;
+  int<lower=0> K;
+  matrix[N, K] X;
+  int<lower=0> y[N];
+  vector[N] offset;
+}
+
+parameters {
+  vector[K] beta;
+}
+
+model {
+
+  for(i in 1:N) {
+    y[i] ~ poisson(offset[i] * exp(X[i] * beta));
+  }
+  
+}
+
+generated quantities {
+  int y_rep[N];
+  for (n in 1:N) {
+    y_rep[n] = poisson_rng(offset[n] * exp(X[n] * beta));
+  }
+}
+
+"
+
+
+stan_data <- roaches %>%
+  tidybayes::compose_data(
+    N      = n,
+    K      = 4,
+    y      = y,
+    X      = model.matrix(~ 1 + roach100 + treatment + senior),
+    offset = exposure2
+  )
+
+m15.3 <- stan(model_code = stan_program, data = stan_data)
+```
+
+```{r}
+m15.3
+```
+
+
+```{r}
+y_rep <- as.matrix(m15.3, pars = "y_rep")
+bayesplot::ppc_dens_overlay(y = log10(stan_data$y + 1), yrep = log10(y_rep[1:200,] + 1))
+```
+
+
+## 15.3 Logistic-binomial model
+
+100个人，每人投篮20次，投篮命中率
+
+```{r}
+n <- 100
+
+data <-
+  tibble(size   = 20,
+         height = rnorm(n, mean = 72, sd = 3)) %>% 
+  mutate(y = rbinom(n, size = size, p = 0.4 + 0.1 * (height - 72) / 3))
+
+head(data)
+```
+
+
+
+```{r, warning=FALSE, message=FALSE}
+stan_program <- "
+data {
+  int<lower=0> N;
+  int<lower=0> K;
+  matrix[N, K] X;
+  int<lower=0> y[N];
+  int trials[N];
+}
+
+parameters {
+  vector[K] beta;
+}
+
+model {
+  
+  for(i in 1:N) {
+    target += binomial_logit_lpmf(y[i] | trials[i], X[i] * beta);
+  }
+  
+}
+
+
+"
+
+
+stan_data <- data %>%
+  tidybayes::compose_data(
+    N      = n,
+    K      = 2,
+    y      = y,
+    trials = size,
+    X      = model.matrix(~ 1 + height)
+  )
+
+m15.5 <- stan(model_code = stan_program, data = stan_data)
+```
+
+
+```{r}
+m15.5
+```
+
+
+### 15.3.1 The binomial model for count data, applied to death sentences.
+
+```{r}
+death <- haven::read_sas("ROS-Examples/death_penalty_data/a14.sas7bdat", NULL)
+
+dim(death)
+```
+
+
+```{r}
+death %>% 
+  filter(TOTLDF >= 1) %>% 
+  dplyr::select(CNTRELF, TOTLDF, YEAR, STATE)
+```
+
+
+```{r}
+death <- death %>% 
+  dplyr::filter(TOTLDF >= 1) %>% 
+  dplyr::select(CNTRELF, TOTLDF, YEAR, STATE) %>% 
+  dplyr::rename_with(tolower) %>% 
+  dplyr::mutate(
+    year1 = year - 1973 + 1,
+    year_c = year - 1984
+  ) %>% 
+  dplyr::mutate(state_num = as.numeric(factor(state)))
+
+head(death)
+```
+
+
+
+
+```{r}
+# `state_al` as baseline
+model.matrix(~ 1 + state + year_c, data = death) %>% 
+  colnames()
+```
+
+
+
+```{r, warning=FALSE, message=FALSE}
+stan_program <- "
+data {
+  int<lower=0> N;
+  int<lower=0> K;
+  matrix[N, K] X;
+  int<lower=0> y[N];
+  int trials[N];
+}
+
+parameters {
+  vector[K] beta;
+}
+
+model {
+  
+  for(i in 1:N) {
+    target += binomial_logit_lpmf(y[i] | trials[i], X[i] * beta);
+  }
+  
+}
+
+
+"
+
+
+stan_data <- list(
+    N      = nrow(death),
+    y      = death$cntrelf,
+    trials = death$totldf,
+    X      = model.matrix(~ 1 + state + year_c, data = death),
+    K      = length(unique(death$state)) - 1 + 2
+  )
+
+m15.6 <- stan(model_code = stan_program, data = stan_data)
+```
+
+
+```{r}
+m15.6
+```
+
+
+```{r m15.6}
+library(brms)
+b15.6 <- 
+  brm(data = death, 
+      family = binomial,
+      cntrelf | trials(totldf) ~ state + year_c,
+      seed = 15)
+```
+
+
+```{r}
+b15.6
+```
+
+
+作者Gelmen说，最好用多层模型(p. 271)，这里截距和时间斜率加入变化效应
+
+
+```{r, warning=FALSE, message=FALSE}
+stan_program <- "
+data {
+  int<lower=0> N;
+  int<lower=0> K;
+  matrix[N, K] X;
+  int<lower=0> y[N];
+  int trials[N];
+  int J;                      // number of grouping
+  int<lower=1, upper=J> g[N]; // index for grouping
+}
+
+parameters {
+  array[J] vector[K] beta;
+  vector[K] MU;
+  vector<lower=0>[K] tau;
+  corr_matrix[K] Rho;
+}
+
+model {
+  vector[N] mu;
+  
+  for(i in 1:N) {
+    mu[i] = X[i] * beta[g[i]];
+  }
+  
+  for(i in 1:N) {
+    target += binomial_logit_lpmf(y[i] | trials[i], mu[i]);
+  }
+  
+  beta ~ multi_normal(MU, quad_form_diag(Rho, tau));
+  tau ~ exponential(1);
+  Rho ~ lkj_corr(2);
+}
+
+
+"
+
+
+stan_data <- list(
+    N      = nrow(death),
+    K      = 2,
+    y      = death$cntrelf,
+    trials = death$totldf,
+    X      = model.matrix(~ 1 + year_c, data = death),
+    J      = length(unique(death$state)),
+    g      = death$state_num
+  )
+
+m15.7 <- stan(model_code = stan_program, data = stan_data)
+```
