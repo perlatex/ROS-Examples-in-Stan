@@ -219,7 +219,7 @@ bayesplot::ppc_dens_overlay(y = log10(stan_data$y + 1), yrep = log10(y_rep[1:200
 
 ## 15.3 Logistic-binomial model
 
-100个人，每人投篮20次，投篮命中率
+100个选手每人投篮20次，假定命中概率是身高的线性函数
 
 ```{r}
 n <- 100
@@ -232,7 +232,12 @@ data <-
 head(data)
 ```
 
-
+$$
+\begin{align*}
+y_i & = \text{Binomial}(n_i, p_i) \\
+p_i & =\text{logit}^{-1}(X_i \beta) 
+\end{align*}
+$$
 
 ```{r, warning=FALSE, message=FALSE}
 stan_program <- "
