@@ -436,3 +436,286 @@ stan_data <- list(
 
 m15.7 <- stan(model_code = stan_program, data = stan_data)
 ```
+
+
+
+
+### 15.5.3 Example of ordered categorical regression.
+
+Load the `2playergames.csv`, `3playergames.csv`, and `6playergames.csv` data files.
+
+```{r, message = F}
+# load the individual data files
+data_2player <- read_csv("ROS-Examples/Storable/data/2playergames.csv")
+data_3player <- read_csv("ROS-Examples/Storable/data/3playergames.csv")
+data_6player <- read_csv("ROS-Examples/Storable/data/6playergames.csv")
+# combine them
+data_all <-
+  bind_rows(data_2player, data_3player, data_6player) %>% 
+  # make an ordered factor version of the vote variable
+  mutate(factor_vote = factor(vote, 
+                              levels = 1:3, 
+                              labels = c("1", "2", "3"), 
+                              ordered = T))
+# take a look
+glimpse(data_all)
+```
+
+
+
+```{r}
+data_all %>% 
+  count(vote)
+```
+
+重复Figure 15.6，代码来源[ASKurz](https://github.com/ASKurz/Working-through-Regression-and-other-stories/blob/main/15.Rmd)
+
+```{r, fig.width = 7, fig.height = 3.5}
+# 6 participants
+plotted <- c(101, 303, 409, 405, 504, 112)
+# participant descriptors
+story <- c("Perfectly monotonic", "One fuzzy and one sharp cutpoint", "Monotonic with one outlier", 
+           "Only 1's and 3's", "Almost only 3's", "Erratic")
+# wrangle
+data_all %>% 
+  filter(person %in% plotted) %>% 
+  mutate(person = factor(person,
+                         levels = plotted,
+                         labels = story)) %>%
+  # plot!
+  ggplot(aes(x = value, y = vote)) +
+  geom_point(alpha = 1/2) +
+  scale_y_continuous(breaks = 1:3) +
+  facet_wrap(~ person)
+```
+#### 15.5.3.2 Fitting the model in R
+
+```{r, fig.width = 5, fig.height = 4}
+data_all %>% 
+  filter(person == 401) %>%
+  ggplot(aes(x = value, y = vote)) +
+  geom_point(alpha = 1/2) +
+  scale_y_continuous(breaks = 1:3)
+```
+根据课本的公式 (15.10)
+$$
+\begin{align*}
+\operatorname{Pr}(y_i = 1 | z_i) & = \operatorname{logit}^{-1}(c_1 - z_i) \\
+\operatorname{Pr}(y_i = 2 | z_i) & = \operatorname{logit}^{-1}(c_2 - z_i) - \operatorname{logit}^{-1}(c_1 - z_i) \\
+\operatorname{Pr}(y_i = 3 | z_i) & = 1 - \operatorname{logit}^{-1}(c_2 - z_i)
+\end{align*}
+$$
+
+$$
+\begin{align*}
+\operatorname{Pr}(y_i = 1) & = \operatorname{logit}^{-1}(c_1 - X_i \beta) \\
+\operatorname{Pr}(y_i = 2) & = \operatorname{logit}^{-1}(c_2 - X_i \beta) - \operatorname{logit}^{-1}(c_1 - X_i \beta) \\
+\operatorname{Pr}(y_i = 3) & = 1 - \operatorname{logit}^{-1}(c_2 - X_i \beta)
+\end{align*}
+$$
+Stan 代码
+```{r, warning=FALSE, message=FALSE, results=FALSE}
+stan_program <- "
+data {
+  int<lower=2> K;
+  int<lower=0> N;
+  int<lower=1> D;
+  int<lower=1,upper=K> y[N];
+  matrix[N, D] x;
+}
+parameters {
+  vector[D] beta;
+  ordered[K-1] cutpoint;
+}
+model {
+  for (n in 1:N) {
+    target += ordered_logistic_lpmf(y[n] | x[n] * beta, cutpoint);
+  }
+  //for (n in 1:N)
+  //  y[n] ~ ordered_logistic(x[n] * beta, cutpoint);
+  
+  beta[1] ~ normal(0, 0.5);
+}
+"
+
+stan_data <- data_all %>% 
+  filter(person == 401) %>% 
+  tidybayes::compose_data(
+    N   = n,
+    K   = 3,  
+    D   = 1,
+    y   = vote,  
+    x   = model.matrix(~ 0 + value, .)
+  )
+
+m15.10 <- stan(model_code = stan_program, data = stan_data)
+```
+
+
+```{r}
+m15.10
+```
+
+结果与课本不一样。我弱弱地观察到，课本貌似用的`data_all`，我们重点关注作者的分析过程。
+
+```{r, eval=FALSE}
+stan_data <- data_all %>% 
+   tidybayes::compose_data(
+    N   = n,
+    K   = 3,  
+    D   = 1,
+    y   = vote,  
+    x   = model.matrix(~ 0 + value, .)
+  )
+
+m15.10a <- stan(model_code = stan_program, data = stan_data)
+```
+
+
+
+
+
+```{r, fig.width = 7.5, fig.height = 2.25}
+m15.10 %>% 
+  tidybayes::spread_draws(beta[i], cutpoint[j]) %>% 
+  ungroup() %>% 
+  pivot_wider(
+    values_from = cutpoint,
+    names_from = j,
+    names_glue = "cutpoint_{j}"
+  ) %>% 
+  transmute(`italic(c)[1.5]` = `cutpoint_1` / beta,
+            `italic(c)[2.5]` = `cutpoint_2` / beta,
+            sigma = 1 / beta) %>%
+  pivot_longer(everything()) %>% 
+  
+  ggplot(aes(x = value, y = 0)) +
+  stat_halfeye(.width = .95, normalize = "panels") +
+  scale_y_continuous(NULL, breaks = NULL) +
+  xlab("marginal posterior") +
+  facet_wrap(~ name, scales = "free", labeller = label_parsed)
+```
+
+
+#### 15.5.3.3 Displaying the fitted model.
+
+
+```{r}
+logit     <- qlogis
+inv_logit <- plogis
+```
+
+
+
+根据如下公式，可计算 `y` 落入各种分类(1、2和3)的概率，这种概率是随着自变量的变化而变化的，
+所以，ASKurz解释为概率轨迹(probability trajectories)
+
+
+$$
+\begin{align*}
+\operatorname{Pr}(y_i = 1) & = \operatorname{logit}^{-1}(c_1 - X_i \beta) \\
+\operatorname{Pr}(y_i = 2) & = \operatorname{logit}^{-1}(c_2 - X_i \beta) - \operatorname{logit}^{-1}(c_1 - X_i \beta) \\
+\operatorname{Pr}(y_i = 3) & = 1 - \operatorname{logit}^{-1}(c_2 - X_i \beta),
+\end{align*}
+$$
+
+
+图形如下:
+
+```{r, warning = F, fig.width = 7, fig.height = 5}
+m15.10 %>% 
+  tidybayes::spread_draws(beta[i], cutpoint[j]) %>% 
+  ungroup() %>% 
+  pivot_wider(
+    values_from = cutpoint,
+    names_from = j,
+    names_glue = "cutpoint_{j}"
+  ) %>% 
+  expand(
+    nesting(.iteration, cutpoint_1, cutpoint_2, beta),
+    value = 0:100
+  ) %>% 
+  mutate(mu = beta * value) %>%
+  mutate(`1` = inv_logit(cutpoint_1 - mu),
+         `2` = inv_logit(cutpoint_2 - mu) - inv_logit(cutpoint_1 - mu),
+         `3` = 1 - inv_logit(cutpoint_2 - mu)
+  ) %>% 
+  pivot_longer(`1`:`3`, values_to = "prob", names_to = "vote") %>% 
+  
+  ggplot(aes(x = value, y = prob, color = vote, fill = vote)) +
+  tidybayes::stat_lineribbon(.width = .95, size = 1/2, alpha = .4) +
+  scale_fill_viridis_d(option = "A", end = .7) +
+  scale_color_viridis_d(option = "A", end = .7) +
+  scale_y_continuous(expression(italic(prob)), expand = c(0, 0), 
+                     breaks = 0:5 / 5, limits = 0:1)
+```
+
+
+书中公式(15.11)
+
+$$
+\begin{align*}
+\operatorname{E}(y | x) & = 1* \operatorname{Pr}(y = 1 |x) + 2* \operatorname{Pr}(y = 2 |x) + 3* \operatorname{Pr}(y = 3 |x) \\ 
+& = 1 * ( 1 - \operatorname{logit}^{-1}(\frac{x - c_1}{\sigma})) \;+ \\
+& \quad + 2 * ( \operatorname{logit}^{-1}(\frac{x - c_1}{\sigma})-  \operatorname{logit}^{-1}(\frac{x - c_2}{\sigma})) \\
+& \quad + 3 *\operatorname{logit}^{-1}(\frac{x - c_2}{\sigma})
+\end{align*}
+$$
+
+```{r}
+f <- summary(m15.10)$summary[, 1]
+f[2] / f[1]
+f[3] / f[1]
+```
+
+
+```{r, fig.width = 5.5, fig.height = 5}
+# for the cutpoints
+lines <-
+  tibble(value = rep(c(f[2] / f[1], f[3] / f[1]), each = 2),
+         vote = c(1, 2, 2, 3))
+
+
+m15.10 %>% 
+  tidybayes::spread_draws(beta[i], cutpoint[j]) %>% 
+  ungroup() %>% 
+  pivot_wider(
+    values_from = cutpoint,
+    names_from = j,
+    names_glue = "cutpoint_{j}"
+  ) %>% 
+  expand(
+    nesting(.iteration, cutpoint_1, cutpoint_2, beta),
+    value = 0:100
+  ) %>% 
+  mutate(mu = beta * value) %>%
+  mutate(
+    p1 = inv_logit(cutpoint_1 - mu),
+    p2 = inv_logit(cutpoint_2 - mu) - inv_logit(cutpoint_1 - mu),
+    p3 = 1 - inv_logit(cutpoint_2 - mu)
+  ) %>% 
+  mutate(vote = p1 * 1 + p2 * 2 + p3 * 3) %>% 
+  
+  
+  # plot!
+  ggplot(aes(x = value, y = vote)) +
+  stat_lineribbon(.width = .95, size = 1/2, fill = "grey85") +
+  geom_path(data = lines,
+            aes(group = value),
+            color = "red3") +
+  geom_point(data = filter(data_all, person == 401),
+             alpha = 1/2) +
+  scale_y_continuous(breaks = 1:3) +
+  ggtitle("Participant 401",
+          subtitle = "One fuzzy and one sharp cutpoint") +
+  theme(legend.position = c(.85, .2))
+```
+
+
+
+## 15.6 Robust regression using the $t$ model
+
+```{r, warning = F, message = F}
+congress <- read_csv("ROS-Examples/Congress/data/congress.csv")
+head(congress)
+```
