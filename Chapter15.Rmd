@@ -719,3 +719,304 @@ m15.10 %>%
 congress <- read_csv("ROS-Examples/Congress/data/congress.csv")
 head(congress)
 ```
+
+
+## 15.8 Going beyond generalized linear models
+
+```{r, warning = F, message = F}
+library(tidyverse)
+earnings <- read_csv("ROS-Examples/Earnings/data/earnings.csv")
+glimpse(earnings)
+```
+
+
+
+$$
+\begin{align*}
+\log(\text{earn}^+) & \sim \operatorname{Normal}(\mu_i, \sigma_i) \\
+\mu_i & = a + b_1 \text{height}_i + b_2 \text{male}_i \\
+\log(\sigma_i) & = c + d_1 \text{male}_i,
+\end{align*}
+$$
+
+
+
+```{r, warning=FALSE, message=FALSE}
+stan_program <- "
+data {
+  int N;
+  vector[N] y;
+  vector[N] height;
+  vector[N] male;
+}
+parameters {
+  real a;
+  real b1;
+  real b2;
+  real c;
+  real d;
+}
+model {
+  vector[N] mu;
+  vector[N] sigma;
+  
+  for(i in 1:N) {
+    mu[i] = a + b1 * height[i] + b2 * male[i];
+    sigma[i] = exp(c + d * male[i]);
+  }
+  
+  for(i in 1:N) {
+    target += lognormal_lpdf(y[i] | mu[i], sigma[i]);
+  }
+
+}
+
+
+"
+
+d <- earnings %>% filter(earn > 0)
+
+stan_data <- list(
+   N      = nrow(d),
+   y      = d$earn,
+   height = d$height, 
+   male   = d$male
+  )
+
+m15.19 <- stan(model_code = stan_program, data = stan_data)
+```
+
+
+
+
+```{r,  fig.width = 5, fig.height = 2.75}
+m15.19 %>% 
+  tidybayes::spread_draws(c, d) %>% 
+  mutate(`sigma[male]`   = exp(c + d),
+         `sigma[female]` = exp(c)) %>% 
+  pivot_longer(`sigma[male]`:`sigma[female]`) %>% 
+  
+  ggplot(aes(x = value, y = name)) +
+  stat_halfeye(.width = .95) +
+  scale_y_discrete(NULL, labels = ggplot2:::parse_safe) +
+  coord_cartesian(ylim = c(1.5, 2.3))
+```
+
+### 15.8.4 Cockroaches and the zero-inflated negative binomial model.
+
+
+$$
+\begin{align*}
+y_i & \sim \operatorname{negative\_binomial}(u_i \exp(X_i\beta), \phi) \\
+& = \operatorname{negative\_binomial}(\exp(\log(u_i)X_i\beta), \;\phi) \\
+& = \operatorname{negative\_binomial\_log}(\log(u_i)X_i\beta, \;\phi) \\
+\log(u_i) & = \log(\text{exposure2}_i) \\
+X_i\beta & = \beta_0 + \beta_1 \text{roach100}_i + \beta_2 \text{treatment}_i + \beta_3 \text{senior}_i 
+
+\end{align*}
+$$
+
+零膨胀回归模型等价于混合模型
+
+$$
+\begin{align*}
+y_i \begin{cases}
+  =0,  & \text{ if } S_i = 0 \\
+  \sim\operatorname{negative\_binomial}(u_i \exp(X_i\beta), \phi) & \text{ if } S_i = 1 \\
+\end{cases}
+\end{align*}
+$$
+
+
+这里的$S_i$ 代表房屋$i$是否有蟑螂，可以用logistic regression模拟
+$$
+\begin{align*}
+\text{Pr}(S_i =1) = \text{logit}^{-1}(X_i \gamma),
+\end{align*}
+$$
+但作者好像没有求$\gamma$，这里可以简化成
+$$
+\begin{align*}
+\text{Pr}(S_i =1) = zi
+\end{align*}
+$$
+即，$\zi$ 为零膨胀的概率。
+
+
+
+
+```{r, warning = F}
+roaches <- 
+  read_csv("ROS-Examples/Roaches/data/roaches.csv", 
+           col_types = cols(X1 = col_skip())) %>% 
+  mutate(roach100 = roach1 / 100)
+
+glimpse(roaches)
+```
+
+
+```{r}
+stan_program <- "
+functions {
+  real zero_inflated_neg_binomial_log_lpmf(int y, real eta, real phi, real zi) { 
+    if (y == 0) { 
+      return log_sum_exp(bernoulli_lpmf(1 | zi), 
+                         bernoulli_lpmf(0 | zi) + 
+                         neg_binomial_2_log_lpmf(0 | eta, phi)); 
+    } else { 
+      return bernoulli_lpmf(0 | zi) + neg_binomial_2_log_lpmf(y | eta, phi); 
+    } 
+  } 
+ 
+}
+data {
+  int<lower=1> N;  
+  int Y[N];        
+  int<lower=1> K;  
+  matrix[N, K] X;  
+  vector[N] offsets;
+
+}
+
+parameters {
+  vector[K] b;              
+  real<lower=0> shape;       // shape parameter
+  real<lower=0,upper=1> zi;  // zero-inflation probability
+}
+
+model {
+
+  vector[N] mu =  X * b + offsets;
+  
+  for (n in 1:N) {
+     target += zero_inflated_neg_binomial_log_lpmf(Y[n] | mu[n], shape, zi);
+  }
+
+  target += gamma_lpdf(shape | 0.01, 0.01);
+  target += beta_lpdf(zi | 1, 1);
+  
+}
+
+"
+
+
+stan_data <- roaches %>%
+  tidybayes::compose_data(
+    N      = n,
+    K      = 4,
+    Y      = y,
+    X      = model.matrix(~ 1 + roach100 + treatment + senior),
+    offsets = log(exposure2)
+  )
+
+m15.23a <- stan(model_code = stan_program, data = stan_data)
+```
+
+或者写在`model{}`里
+
+```{r}
+stan_program <- "
+data {
+  int<lower=1> N;  
+  int y[N];        
+  int<lower=1> K;  
+  matrix[N, K] X;  
+  vector[N] offsets;
+
+}
+
+parameters {
+  vector[K] b;              
+  real<lower=0> shape;       // shape parameter
+  real<lower=0,upper=1> zi;  // zero-inflation probability
+}
+
+model {
+
+  vector[N] mu = X * b + offsets;
+  
+  for (i in 1:N) {
+   if (y[i] == 0) { 
+      target += log_sum_exp(bernoulli_lpmf(1 | zi), 
+                         bernoulli_lpmf(0 | zi) + 
+                         neg_binomial_2_log_lpmf(0 | mu[i], shape)); 
+    } else { 
+      target += bernoulli_lpmf(0 | zi) + neg_binomial_2_log_lpmf(y[i] | mu[i], shape); 
+    } 
+  } 
+ 
+ 
+  target += gamma_lpdf(shape | 0.01, 0.01);
+  target += beta_lpdf(zi | 1, 1);
+  
+}
+
+
+generated quantities {
+  vector[N] y_predict; 
+
+  for(n in 1:N) {
+    real tmp = bernoulli_rng(zi);
+    if (tmp == 1) {
+      y_predict[n] = 0;
+    } else {
+      y_predict[n] = neg_binomial_2_log_rng(X[n] * b + offsets[n], shape);
+    }
+ }
+   
+}
+
+
+"
+
+
+stan_data <- roaches %>%
+  tidybayes::compose_data(
+    N      = n,
+    K      = 4,
+    y      = y,
+    X      = model.matrix(~ 1 + roach100 + treatment + senior),
+    offsets = log(exposure2)
+  )
+
+m15.23b <- stan(model_code = stan_program, data = stan_data)
+```
+
+
+
+
+```{r}
+m15.23b
+```
+
+
+
+```{r, fig.width = 3, fig.height = 2.75, warning = F, message = F}
+m15.23b %>% 
+  tidybayes::spread_draws(y_predict[i]) %>% 
+  mutate(y_rep_log = log10(y_predict + 1)) %>% 
+  filter(.draw <= 200) %>% 
+  ggplot(aes(x = y_rep_log)) +
+  geom_density(aes(group = .draw), colour = alpha("gray", 0.3)) +
+  geom_density(
+    data = roaches, aes(x = log10(y + 1)), color = "red"
+  ) +
+  labs(subtitle = "zero-inflated negative binomial",
+       x = "log10(y+1)") +
+  coord_cartesian(xlim = c(NA, 3.25))
+```
+
+
+或者使用`bayesplot::ppc_dens_overlay()`
+
+```{r, fig.width = 3, fig.height = 2.75, warning = F, message = F}
+y_rep <- as.matrix(m15.23b, pars = "y_predict")  
+
+bayesplot::ppc_dens_overlay(log10(stan_data$y + 1), log10(y_rep[1:200,] + 1) ) +
+
+  labs(subtitle = "zero-inflated negative binomial",
+       x = "log10(y+1)") +
+  coord_cartesian(xlim = c(NA, 3.25))
+
+```
+
