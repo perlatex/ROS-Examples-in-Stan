@@ -52,7 +52,7 @@ $$
 我更喜欢这种表述
 $$
 \begin{align}
-y &= \text{bernoulli}(p_i) \\
+y &\sim \text{bernoulli}(p_i) \\
 p_i & = \text{inv_logit}(\alpha + \beta x)
 \end{align}
 $$
@@ -105,7 +105,7 @@ m13.1 %>%
   tidybayes::spread_draws(beta) %>% 
   
   ggplot(aes(x = beta)) +
-  tidybayes::stat_halfeye(.width = c(0.66, 0.95)) + 
+  ggdist::stat_halfeye(.width = c(0.66, 0.95)) + 
   theme_bw() 
 ```
 
@@ -166,7 +166,7 @@ m13.1a <- stan(model_code = stan_program, data = stan_data)
 m13.1a
 ```
 
-## using brms
+### using brms
 ```{r}
 library(brms)
 brms_logit <- brm(
@@ -175,6 +175,14 @@ brms_logit <- brm(
   data = df
   )
 ```
+
+```{r}
+brms_logit %>% brms::posterior_linpred(newdata = newdata) # return 4000 * 5 matrix
+brms_logit %>% brms::posterior_epred(newdata = newdata)   # return 4000 * 5 matrix
+brms_logit %>% brms::posterior_predict(newdata = newdata) # return 4000 * 5 matrix
+```
+
+
 
 ```{r}
 brms_logit %>% 
@@ -200,3 +208,60 @@ brms_logit %>%
   tidybayes::mean_hdi()       # 统计均值
 ```
 
+### using stan_glm()
+```{r}
+library(rstanarm)
+fit_1 <- stan_glm(
+  rvote ~ 1 + income, 
+  family = binomial(link = "logit"),
+  data = df
+  )
+
+fit_1
+```
+
+
+```{r, eval=FALSE}
+fit_1 %>% rstanarm::posterior_linpred(newdata = newdata) # return 4000 * 5 matrix
+fit_1 %>% rstanarm::posterior_epred(newdata = newdata)   # return 4000 * 5 matrix
+fit_1 %>% rstanarm::posterior_predict(newdata = newdata) # return 4000 * 5 matrix
+```
+
+```{r}
+epred <- fit_1 %>% 
+  rstanarm::posterior_epred(newdata = newdata)
+```
+
+最有钱的人群`level = 5` 与 第二有钱的人群`level =4`，支持bush的概率差
+```{r}
+mean(epred[, 5] > epred[, 4])
+quantile(epred[, 5] - epred[, 4], c(0.025, 0.975))
+```
+
+
+```{r}
+fit_1 %>% 
+  tidybayes::linpred_draws(
+    newdata = newdata
+  ) %>% 
+  tidybayes::mean_hdi()
+```
+
+```{r}
+fit_1 %>% 
+  tidybayes::epred_draws(
+    newdata = newdata
+  ) %>% 
+  tidybayes::mean_hdi()
+```
+
+```{r}
+fit_1 %>% 
+  tidybayes::predicted_draws( # 输出 0, 1, 1 ... 
+    newdata = newdata
+  ) %>% 
+  tidybayes::mean_qi()        # 统计均值
+```
+
+感觉 `brms` 与 `rstanarm` 各搞一套，最后被 `tidybayes` 一统江湖，回归到`tidyverse`框架。
+但我最喜欢的还是用Stan
