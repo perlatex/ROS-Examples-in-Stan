@@ -438,7 +438,49 @@ m15.7 <- stan(model_code = stan_program, data = stan_data)
 ```
 
 
+### 15.4 Probit regression: normally distributed latent data
+```{r, message=FALSE, warning=FALSE}
+wells <- read_csv("ROS-Examples/Arsenic/data/wells.csv")
+glimpse(wells)
+```
 
+
+```{r, warning=FALSE, message=FALSE}
+stan_program <- "
+data {
+  int<lower=0> N;
+  int<lower=0> K;
+  matrix[N, K] X;
+  int<lower=0,upper=1> y[N];
+}
+parameters {
+  vector[K] beta;
+}
+model {
+  
+  // y ~  bernoulli(Phi( X * beta));
+  
+  // Phi_approx is faster
+  y ~  bernoulli(Phi_approx( X * beta));
+  
+}
+"
+stan_data <- wells %>%
+  tidybayes::compose_data(
+    N = n,
+    K = 2,
+    y = switch,
+    X = model.matrix(~ 1 + dist100)
+  )
+
+fit_probit <- stan(model_code = stan_program, data = stan_data)
+```
+
+```{r}
+fit_probit
+```
+
+## 15.5 Ordered and unordered categorical regression
 
 ### 15.5.3 Example of ordered categorical regression.
 
