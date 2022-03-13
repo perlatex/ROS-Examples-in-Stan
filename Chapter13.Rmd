@@ -263,5 +263,79 @@ fit_1 %>%
   tidybayes::mean_qi()        # 统计均值
 ```
 
-感觉 `brms` 与 `rstanarm` 各搞一套，最后被 `tidybayes` 一统江湖，回归到`tidyverse`框架。
-但我最喜欢的还是用Stan
+感觉 `brms` 与 `rstanarm` 各搞一套，最后被 `tidybayes` 一统江湖，回归到`tidyverse`框架。但我最喜欢的还是用Stan。
+
+
+
+
+
+## 13.4 Latent-data formulation
+
+使用隐变量公式，每一个$y_i$ 对应着一个隐变量$z_i$
+
+$$
+\begin{align*}
+y_i & = \left \{
+ \begin{array}{@{}ll@{}}
+   1 & \text{if}\ z_i > 0 \\
+   0 & \text{if}\ z_i < 0
+ \end{array} \right. \\
+z_i & = X_i \beta + \epsilon_i, 
+\end{align*}
+$$
+这里独立的误差项$\epsilon_i$服从*logistic* 密度分布。
+
+$$
+\operatorname{Pr}(\epsilon_i < x) = \operatorname{logit}^{-1} (x)\ \text{for all}\ x.
+$$
+
+
+原书中图13.5给出了*logistic* 密度分布的图形
+
+
+```{r, fig.height = 3, fig.width = 5.5}
+tibble(x = seq(from = -7, to = 7, length.out = 200)) %>% 
+  mutate(d = dlogis(x, location = 0, scale = 1)) %>% 
+  
+  ggplot(aes(x = x, y = d)) +
+  geom_line() +
+  scale_x_continuous(NULL, breaks = -3:3 * 2, expand = c(0, 0)) +
+  scale_y_continuous(NULL, breaks = NULL, expand = expansion(mult = c(0, 0.05))) +
+  labs(subtitle = "Logistic probability density function")
+```
+
+
+
+$$
+\operatorname{Pr}(y_i = 1) = \operatorname{Pr}(z_i > 0) = \operatorname{Pr}(\epsilon_i > -X_i \beta) = \operatorname{logit}^{-1}(X_i \beta)
+$$ 
+
+图13.6 给出了当线性组合 $X_i \beta$等于 -1.07时，隐变量$z_i$的概率密度，它对应图中的灰色区域。
+
+
+```{r, fig.height = 3, fig.width = 5.5}
+tibble(x = seq(from = -7, to = 7, length.out = 201)) %>% 
+  mutate(d = dlogis(x, location = -1.07, scale = 1)) %>% 
+  
+  ggplot(aes(x = x, y = d)) +
+  geom_ribbon(aes(ymin = 0, ymax = d, fill = x > 0)) +
+  geom_line() +
+  scale_fill_manual(values = c("white", "grey67"), breaks = NULL) +
+  scale_x_continuous(NULL, breaks = -3:3 * 2, expand = c(0, 0)) +
+  scale_y_continuous(NULL, breaks = NULL, expand = expansion(mult = c(0, 0.05))) +
+  labs(subtitle = "Latent variable formulation of logit")
+```
+
+可以使用`invlogit()`函数计算灰色区域代表的隐变量$z_i$的概率密度
+
+$$
+\operatorname{Pr}(y_i = 1) = \operatorname{Pr}(z_i > 0) = \operatorname{Pr}(\epsilon_i > -X_i \beta) = \operatorname{logit}^{-1}(X_i \beta)
+$$ 
+
+
+```{r}
+logit <- qlogis 
+invlogit <- plogis
+
+invlogit(-1.07)
+```

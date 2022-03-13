@@ -482,6 +482,116 @@ fit_probit
 
 ## 15.5 Ordered and unordered categorical regression
 
+`logisitc` 和 `probit` 回归种被预测变量是二元的，可以扩展到多种类别，这多种类别可以是有序的也可以是无序的。
+
+### 15.5.1 The ordered multinomial logit model.
+
+被预测变量 $y$ 可以写成$1, 2, \dots , K$. 有序的逻辑斯蒂模型可以写成两种等价的模型。
+第一种为表述为一系列逻辑斯蒂回归
+
+```{r, out.width = '80%', echo = FALSE}
+knitr::include_graphics("images/ordinal_regression.png")
+```
+
+
+
+$$
+\begin{align*}
+\operatorname{Pr}(y > 1) & = \operatorname{logit}^{-1} (X \beta), \\
+\operatorname{Pr}(y > 2) & = \operatorname{logit}^{-1} (X \beta - c_2), \\
+\operatorname{Pr}(y > 3) & = \operatorname{logit}^{-1} (X \beta - c_3), \\
+\dots & \\
+\operatorname{Pr}(y > K - 1) & = \operatorname{logit}^{-1} (X \beta - c_{K - 1}).
+\end{align*}
+$$
+
+
+
+
+
+
+公式(15.6)中两者相减，可以得到被预测变量等于某个值`y = k`的概率
+$$
+ \begin{align*}
+ \operatorname{Pr}(y = k) & = \operatorname{Pr}(y > k - 1) - \operatorname{Pr}(y > k) \\
+ & = \operatorname{logit}^{-1} (X \beta - c_{k - 1}) - \operatorname{logit}^{-1} (X \beta - c_k).
+ \end{align*}
+$$
+
+
+### 15.5.2 Latent variable interpretation with cutpoints.
+
+第二种表述，推广第13章的公式(13.5)到$K$分类，可以得到有序分类模型的隐变量表述
+
+$$
+ \begin{align*}
+ y_i & = \left \{
+   \begin{array}{@{}ll@{}}
+     1 & \text{if}\ z_i < 0 \\
+     2 & \text{if}\ z_i \in (0, c_2) \\
+     3 & \text{if}\ z_i \in (c_2, c_3) \\
+     & \dots \\
+     K - 1 & \text{if}\ z_i \in (c_{K - 2}, c_{K - 1}) \\
+     K & \text{if}\ z_i > c_{K - 1},
+   \end{array} \right. \\
+ z_i & = X_i \beta + \epsilon_i,
+ \end{align*}
+$$
+这里独立的误差项$\epsilon_i$服从*logistic* 密度分布。
+
+
+```{r, eval=FALSE}
+logit <- qlogis 
+invlogit <- plogis
+
+ggplot() +
+  geom_function(fun = dlogis, args = list(scale = 0.4)) +
+  xlim(-2, 2)
+
+ggplot() +
+  geom_function(fun = qlogis, args = list(scale = 0.4)) +
+  xlim(-2, 2)
+
+ggplot() +
+  geom_function(fun = plogis, args = list(scale = 0.4)) +
+  xlim(-2, 2)
+```
+
+这里重复了图(15.5)
+```{r, fig.width = 8, fig.height = 2.25}
+# cutpoint lines
+lines <-
+  crossing(x  = c(0, 0.8, 1.8),
+           xb = c(-0.7, 1.2, 2.8)) %>% 
+  mutate(d     = dlogis(x, location = xb, scale = 0.4),
+         facet = str_c("italic(X)*beta==", xb))
+
+
+# densities
+crossing(x  = seq(from = -4, to = 6, length.out = 201),
+         xb = c(-0.7, 1.2, 2.8)) %>% 
+  mutate(d     = dlogis(x, location = xb, scale = 0.4),
+         facet = str_c("italic(X)*beta==", xb)) %>% 
+  
+  #  plot!
+  ggplot(aes(x = x)) +
+  geom_line(aes(y = d)) +
+  geom_segment(data = lines,
+               aes(xend = x, y = 0, yend = d),
+               linetype = 2, size = 1/4) +
+  scale_y_continuous(NULL, breaks = NULL,
+                     expand = expansion(mult = c(0, 0.05)), limits = c(0, NA)) +
+  xlab(expression(italic(z) == italic(X)*beta + epsilon)) +
+  facet_wrap(~ facet, labeller = label_parsed)
+```
+
+我做了这张图，感觉更好理解
+```{r, out.width = '80%', echo = FALSE}
+knitr::include_graphics("images/ordinal_Latent_variable_interpretation_with_cutpoints.jpg")
+```
+
+
+
 ### 15.5.3 Example of ordered categorical regression.
 
 Load the `2playergames.csv`, `3playergames.csv`, and `6playergames.csv` data files.
@@ -556,6 +666,7 @@ $$
 \operatorname{Pr}(y_i = 3) & = 1 - \operatorname{logit}^{-1}(c_2 - X_i \beta)
 \end{align*}
 $$
+
 Stan 代码
 ```{r, warning=FALSE, message=FALSE, results=FALSE}
 stan_program <- "
